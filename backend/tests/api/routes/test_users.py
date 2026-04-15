@@ -519,3 +519,70 @@ def test_delete_user_without_privileges(
     )
     assert r.status_code == 403
     assert r.json()["detail"] == "The user doesn't have enough privileges"
+
+
+def test_export_users_csv_as_superuser(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    # Create a user with a known email so we can assert it appears in the CSV
+    username = random_email()
+    password = random_lower_string()
+    full_name = random_lower_string()
+    user_in = UserCreate(email=username, password=password, full_name=full_name)
+    crud.create_user(session=db, user_create=user_in)
+
+    r = client.get(
+        f"{settings.API_V1_STR}/users/export",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    assert "users.csv" in r.headers["content-disposition"]
+
+    content = r.text
+    lines = [line for line in content.splitlines() if line.strip()]
+    assert len(lines) >= 2  # header + at least one user row
+
+    header = lines[0].split(",")
+    assert "id" in header
+    assert "email" in header
+    assert "full_name" in header
+    assert "is_active" in header
+    assert "is_superuser" in header
+    assert "created_at" in header
+
+    # Verify the created user appears in the CSV
+    assert any(username in line for line in lines[1:])
+
+
+def test_export_users_csv_contains_no_passwords(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    password = random_lower_string()
+    user_in = UserCreate(email=random_email(), password=password)
+    crud.create_user(session=db, user_create=user_in)
+
+    r = client.get(
+        f"{settings.API_V1_STR}/users/export",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200
+    content = r.text
+    assert "hashed_password" not in content
+    assert "password" not in content.splitlines()[0]  # not in header
+
+
+def test_export_users_csv_forbidden_for_normal_user(
+    client: TestClient, normal_user_token_headers: dict[str, str]
+) -> None:
+    r = client.get(
+        f"{settings.API_V1_STR}/users/export",
+        headers=normal_user_token_headers,
+    )
+    assert r.status_code == 403
+
+
+def test_export_users_csv_forbidden_unauthenticated(client: TestClient) -> None:
+    r = client.get(f"{settings.API_V1_STR}/users/export")
+    assert r.status_code == 401
