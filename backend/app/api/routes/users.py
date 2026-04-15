@@ -1,7 +1,10 @@
+import csv
+import io
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlmodel import col, delete, func, select
 
 from app import crud
@@ -49,6 +52,43 @@ def read_users(session: SessionDep, skip: int = 0, limit: int = 100) -> Any:
 
     users_public = [UserPublic.model_validate(user) for user in users]
     return UsersPublic(data=users_public, count=count)
+
+
+@router.get(
+    "/export",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_class=StreamingResponse,
+)
+def export_users_csv(session: SessionDep) -> StreamingResponse:
+    """
+    Export all users as a downloadable CSV file. Superusers only.
+    """
+    statement = select(User).order_by(col(User.created_at).desc())
+    users = session.exec(statement).all()
+
+    fieldnames = ["id", "email", "full_name", "is_active", "is_superuser", "created_at"]
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for user in users:
+        writer.writerow(
+            {
+                "id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name or "",
+                "is_active": user.is_active,
+                "is_superuser": user.is_superuser,
+                "created_at": user.created_at.isoformat() if user.created_at else "",
+            }
+        )
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=users.csv"},
+    )
 
 
 @router.post(
