@@ -2,7 +2,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import col, delete, func, select
+from sqlmodel import Session, col, delete, func, select
 
 from app import crud
 from app.api.deps import (
@@ -27,6 +27,72 @@ from app.models import (
 from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _get_user_or_404(*, session: Session, user_id: uuid.UUID) -> User:
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="The user with this id does not exist in the system",
+        )
+    return user
+
+
+def _is_last_active_superuser(*, session: Session, user: User) -> bool:
+    if not user.is_superuser or not user.is_active:
+        return False
+
+    active_superusers_statement = select(func.count()).where(
+        User.is_superuser,
+        User.is_active,
+    )
+    active_superusers_count = session.exec(active_superusers_statement).one()
+    return active_superusers_count == 1
+
+
+def _ensure_user_can_change_active_status(
+    *,
+    session: Session,
+    current_user: User,
+    user: User,
+    is_active: bool,
+) -> None:
+    if user == current_user and is_active is False:
+        raise HTTPException(
+            status_code=403,
+            detail="Super users are not allowed to deactivate themselves",
+        )
+    if is_active is False and _is_last_active_superuser(session=session, user=user):
+        raise HTTPException(
+            status_code=403,
+            detail="The last active superuser cannot be deactivated",
+        )
+
+
+def _set_user_active_status(
+    *,
+    session: Session,
+    current_user: User,
+    user: User,
+    is_active: bool,
+) -> User:
+    _ensure_user_can_change_active_status(
+        session=session,
+        current_user=current_user,
+        user=user,
+        is_active=is_active,
+    )
+
+    if user.is_active == is_active:
+        status_message = "active" if is_active else "inactive"
+        raise HTTPException(
+            status_code=409,
+            detail=f"User is already {status_message}",
+        )
+
+    user_update = UserUpdate(is_active=is_active)
+    return crud.update_user(session=session, db_user=user, user_in=user_update)
 
 
 @router.get(
@@ -187,6 +253,7 @@ def read_user_by_id(
 def update_user(
     *,
     session: SessionDep,
+    current_user: CurrentUser,
     user_id: uuid.UUID,
     user_in: UserUpdate,
 ) -> Any:
@@ -194,11 +261,27 @@ def update_user(
     Update a user.
     """
 
-    db_user = session.get(User, user_id)
-    if not db_user:
+    db_user = _get_user_or_404(session=session, user_id=user_id)
+    is_deactivating_last_active_superuser = (
+        user_in.is_active is False and _is_last_active_superuser(session=session, user=db_user)
+    )
+    is_demoting_last_active_superuser = (
+        user_in.is_superuser is False
+        and db_user.is_superuser
+        and db_user.is_active
+        and _is_last_active_superuser(session=session, user=db_user)
+    )
+    if user_in.is_active is False:
+        _ensure_user_can_change_active_status(
+            session=session,
+            current_user=current_user,
+            user=db_user,
+            is_active=False,
+        )
+    if is_demoting_last_active_superuser:
         raise HTTPException(
-            status_code=404,
-            detail="The user with this id does not exist in the system",
+            status_code=403,
+            detail="The last active superuser cannot lose superuser privileges",
         )
     if user_in.email:
         existing_user = crud.get_user_by_email(session=session, email=user_in.email)
@@ -209,6 +292,46 @@ def update_user(
 
     db_user = crud.update_user(session=session, db_user=db_user, user_in=user_in)
     return db_user
+
+
+@router.post(
+    "/{user_id}/deactivate",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=UserPublic,
+)
+def deactivate_user(
+    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+) -> Any:
+    """
+    Deactivate a user.
+    """
+    user = _get_user_or_404(session=session, user_id=user_id)
+    return _set_user_active_status(
+        session=session,
+        current_user=current_user,
+        user=user,
+        is_active=False,
+    )
+
+
+@router.post(
+    "/{user_id}/activate",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=UserPublic,
+)
+def activate_user(
+    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+) -> Any:
+    """
+    Reactivate a user.
+    """
+    user = _get_user_or_404(session=session, user_id=user_id)
+    return _set_user_active_status(
+        session=session,
+        current_user=current_user,
+        user=user,
+        is_active=True,
+    )
 
 
 @router.delete("/{user_id}", dependencies=[Depends(get_current_active_superuser)])
@@ -224,6 +347,11 @@ def delete_user(
     if user == current_user:
         raise HTTPException(
             status_code=403, detail="Super users are not allowed to delete themselves"
+        )
+    if _is_last_active_superuser(session=session, user=user):
+        raise HTTPException(
+            status_code=403,
+            detail="The last active superuser cannot be deleted",
         )
     statement = delete(Item).where(col(Item.owner_id) == user_id)
     session.exec(statement)

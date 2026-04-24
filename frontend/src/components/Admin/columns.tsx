@@ -55,11 +55,11 @@ export const columns: ColumnDef<UserTableData>[] = [
         <span
           className={cn(
             "size-2 rounded-full",
-            row.original.is_active ? "bg-green-500" : "bg-gray-400",
+            row.original.is_active ? "bg-green-500" : "bg-amber-500",
           )}
         />
         <span className={row.original.is_active ? "" : "text-muted-foreground"}>
-          {row.original.is_active ? "Active" : "Inactive"}
+          {row.original.is_active ? "Active" : "Suspended"}
         </span>
       </div>
     ),

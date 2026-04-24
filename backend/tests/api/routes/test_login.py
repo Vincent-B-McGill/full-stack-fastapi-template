@@ -34,6 +34,29 @@ def test_get_access_token_incorrect_password(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def test_get_access_token_inactive_user(client: TestClient, db: Session) -> None:
+    email = random_email()
+    password = random_lower_string()
+
+    user_create = UserCreate(
+        email=email,
+        full_name="Inactive User",
+        password=password,
+        is_active=False,
+        is_superuser=False,
+    )
+    create_user(session=db, user_create=user_create)
+
+    login_data = {
+        "username": email,
+        "password": password,
+    }
+    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
+
+    assert r.status_code == 400
+    assert r.json() == {"detail": "Inactive user"}
+
+
 def test_use_access_token(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
@@ -77,6 +100,33 @@ def test_recovery_password_user_not_exits(
     assert r.json() == {
         "message": "If that email is registered, we sent a password recovery link"
     }
+
+
+def test_recovery_password_inactive_user_does_not_send_email(
+    client: TestClient, db: Session, normal_user_token_headers: dict[str, str]
+) -> None:
+    email = random_email()
+    password = random_lower_string()
+    user_create = UserCreate(
+        email=email,
+        full_name="Inactive User",
+        password=password,
+        is_active=False,
+        is_superuser=False,
+    )
+    create_user(session=db, user_create=user_create)
+
+    with patch("app.api.routes.login.send_email") as send_email_mock:
+        r = client.post(
+            f"{settings.API_V1_STR}/password-recovery/{email}",
+            headers=normal_user_token_headers,
+        )
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "message": "If that email is registered, we sent a password recovery link"
+    }
+    send_email_mock.assert_not_called()
 
 
 def test_reset_password(client: TestClient, db: Session) -> None:
@@ -124,6 +174,31 @@ def test_reset_password_invalid_token(
     assert "detail" in response
     assert r.status_code == 400
     assert response["detail"] == "Invalid token"
+
+
+def test_reset_password_inactive_user(client: TestClient, db: Session) -> None:
+    email = random_email()
+    password = random_lower_string()
+    user_create = UserCreate(
+        email=email,
+        full_name="Inactive User",
+        password=password,
+        is_active=False,
+        is_superuser=False,
+    )
+    create_user(session=db, user_create=user_create)
+    token = generate_password_reset_token(email=email)
+    headers = user_authentication_headers(client=client, email=settings.FIRST_SUPERUSER, password=settings.FIRST_SUPERUSER_PASSWORD)
+    data = {"new_password": random_lower_string(), "token": token}
+
+    r = client.post(
+        f"{settings.API_V1_STR}/reset-password/",
+        headers=headers,
+        json=data,
+    )
+
+    assert r.status_code == 400
+    assert r.json() == {"detail": "Inactive user"}
 
 
 def test_login_with_bcrypt_password_upgrades_to_argon2(
