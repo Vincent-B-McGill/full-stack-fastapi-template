@@ -218,6 +218,29 @@ def test_update_user_me(
     user_db = db.exec(user_query).first()
     assert user_db
     assert user_db.email == email
+
+
+def test_superuser_cannot_deactivate_self(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    superuser = crud.get_user_by_email(session=db, email=settings.FIRST_SUPERUSER)
+    assert superuser
+
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/{superuser.id}",
+        headers=superuser_token_headers,
+        json={"is_active": False},
+    )
+
+    assert r.status_code == 403
+    assert r.json() == {
+        "detail": "Super users are not allowed to deactivate themselves"
+    }
+
+    db.refresh(superuser)
+    assert superuser.is_active is True
     assert user_db.full_name == full_name
 
 

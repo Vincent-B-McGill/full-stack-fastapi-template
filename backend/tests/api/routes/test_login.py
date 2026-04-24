@@ -34,6 +34,29 @@ def test_get_access_token_incorrect_password(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def test_get_access_token_inactive_user(client: TestClient, db: Session) -> None:
+    email = random_email()
+    password = random_lower_string()
+
+    user_create = UserCreate(
+        email=email,
+        full_name="Inactive User",
+        password=password,
+        is_active=False,
+        is_superuser=False,
+    )
+    create_user(session=db, user_create=user_create)
+
+    login_data = {
+        "username": email,
+        "password": password,
+    }
+    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
+
+    assert r.status_code == 400
+    assert r.json() == {"detail": "Inactive user"}
+
+
 def test_use_access_token(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:

@@ -187,6 +187,7 @@ def read_user_by_id(
 def update_user(
     *,
     session: SessionDep,
+    current_user: CurrentUser,
     user_id: uuid.UUID,
     user_in: UserUpdate,
 ) -> Any:
@@ -199,6 +200,11 @@ def update_user(
         raise HTTPException(
             status_code=404,
             detail="The user with this id does not exist in the system",
+        )
+    if db_user == current_user and user_in.is_active is False:
+        raise HTTPException(
+            status_code=403,
+            detail="Super users are not allowed to deactivate themselves",
         )
     if user_in.email:
         existing_user = crud.get_user_by_email(session=session, email=user_in.email)
