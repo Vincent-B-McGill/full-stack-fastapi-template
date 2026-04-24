@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import useAuth from "@/hooks/useAuth"
 import DeleteUser from "./DeleteUser"
 import EditUser from "./EditUser"
+import ToggleUserStatus from "./ToggleUserStatus"
 
 interface UserActionsMenuProps {
   user: UserPublic
@@ -32,6 +34,8 @@ export const UserActionsMenu = ({ user }: UserActionsMenuProps) => {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <ToggleUserStatus user={user} onSuccess={() => setOpen(false)} />
+        <DropdownMenuSeparator />
         <EditUser user={user} onSuccess={() => setOpen(false)} />
         <DeleteUser id={user.id} onSuccess={() => setOpen(false)} />
       </DropdownMenuContent>
