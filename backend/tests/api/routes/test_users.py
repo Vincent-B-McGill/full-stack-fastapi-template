@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import verify_password
 from app.models import User, UserCreate
 from tests.utils.user import create_random_user
+from tests.utils.user import user_authentication_headers
 from tests.utils.utils import random_email, random_lower_string
 
 
@@ -241,7 +242,214 @@ def test_superuser_cannot_deactivate_self(
 
     db.refresh(superuser)
     assert superuser.is_active is True
-    assert user_db.full_name == full_name
+
+
+def test_superuser_can_deactivate_and_reactivate_user(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    password = random_lower_string()
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(email=random_email(), password=password),
+    )
+
+    deactivate_response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/deactivate",
+        headers=superuser_token_headers,
+    )
+    assert deactivate_response.status_code == 200
+    assert deactivate_response.json()["is_active"] is False
+
+    db.refresh(user)
+    assert user.is_active is False
+
+    reactivate_response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/activate",
+        headers=superuser_token_headers,
+    )
+    assert reactivate_response.status_code == 200
+    assert reactivate_response.json()["is_active"] is True
+
+    db.refresh(user)
+    assert user.is_active is True
+
+    relogin_response = client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": user.email, "password": password},
+    )
+    assert relogin_response.status_code == 200
+    assert "access_token" in relogin_response.json()
+
+
+def test_inactive_user_token_is_rejected_after_deactivation(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    password = random_lower_string()
+    email = random_email()
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(email=email, password=password),
+    )
+    user_headers = user_authentication_headers(
+        client=client,
+        email=email,
+        password=password,
+    )
+
+    deactivate_response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/deactivate",
+        headers=superuser_token_headers,
+    )
+    assert deactivate_response.status_code == 200
+
+    token_check = client.post(
+        f"{settings.API_V1_STR}/login/test-token",
+        headers=user_headers,
+    )
+    assert token_check.status_code == 400
+    assert token_check.json() == {"detail": "Inactive user"}
+
+
+def test_deactivate_user_already_inactive_returns_conflict(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(
+            email=random_email(),
+            password=random_lower_string(),
+            is_active=False,
+        ),
+    )
+
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/deactivate",
+        headers=superuser_token_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "User is already inactive"}
+
+
+def test_activate_user_already_active_returns_conflict(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(email=random_email(), password=random_lower_string()),
+    )
+
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/activate",
+        headers=superuser_token_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "User is already active"}
+
+
+def test_activate_user_not_found(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{uuid.uuid4()}/activate",
+        headers=superuser_token_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "The user with this id does not exist in the system"
+    }
+
+
+def test_deactivate_user_not_found(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{uuid.uuid4()}/deactivate",
+        headers=superuser_token_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "The user with this id does not exist in the system"
+    }
+
+
+def test_normal_user_cannot_activate_user(
+    client: TestClient,
+    normal_user_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(
+            email=random_email(),
+            password=random_lower_string(),
+            is_active=False,
+        ),
+    )
+
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/activate",
+        headers=normal_user_token_headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "The user doesn't have enough privileges"
+    }
+
+
+def test_normal_user_cannot_deactivate_user(
+    client: TestClient,
+    normal_user_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    user = crud.create_user(
+        session=db,
+        user_create=UserCreate(email=random_email(), password=random_lower_string()),
+    )
+
+    response = client.post(
+        f"{settings.API_V1_STR}/users/{user.id}/deactivate",
+        headers=normal_user_token_headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "The user doesn't have enough privileges"
+    }
+
+
+def test_last_active_superuser_cannot_lose_superuser_privileges(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    superuser = crud.get_user_by_email(session=db, email=settings.FIRST_SUPERUSER)
+    assert superuser
+
+    response = client.patch(
+        f"{settings.API_V1_STR}/users/{superuser.id}",
+        headers=superuser_token_headers,
+        json={"is_superuser": False},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "The last active superuser cannot lose superuser privileges"
+    }
 
 
 def test_update_password_me(

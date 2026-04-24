@@ -57,9 +57,10 @@ def recover_password(email: str, session: SessionDep) -> Message:
     """
     user = crud.get_user_by_email(session=session, email=email)
 
-    # Always return the same response to prevent email enumeration attacks
-    # Only send email if user actually exists
-    if user:
+    # Always return the same response to prevent email enumeration attacks.
+    # Only send email for active users, otherwise suspension would still trigger
+    # password reset emails that cannot be completed.
+    if user and user.is_active:
         password_reset_token = generate_password_reset_token(email=email)
         email_data = generate_reset_password_email(
             email_to=user.email, email=email, token=password_reset_token
