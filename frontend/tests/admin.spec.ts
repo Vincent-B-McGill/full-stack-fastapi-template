@@ -96,6 +96,39 @@ test.describe("Admin user management", () => {
     await expect(page.getByText(updatedName)).toBeVisible()
   })
 
+  test("Suspend and reactivate a user successfully", async ({ page }) => {
+    await page.goto("/admin")
+
+    const email = randomEmail()
+    const password = randomPassword()
+
+    await page.getByRole("button", { name: "Add User" }).click()
+    await page.getByPlaceholder("Email").fill(email)
+    await page.getByPlaceholder("Password").first().fill(password)
+    await page.getByPlaceholder("Password").last().fill(password)
+    await page.getByRole("button", { name: "Save" }).click()
+
+    await expect(page.getByText("User created successfully")).toBeVisible()
+    await expect(page.getByRole("dialog")).not.toBeVisible()
+
+    const userRow = page.getByRole("row").filter({ hasText: email })
+    await expect(userRow.getByText("Active")).toBeVisible()
+
+    await userRow.getByRole("button").click()
+    await page.getByRole("menuitem", { name: "Suspend User" }).click()
+    await page.getByRole("button", { name: "Suspend" }).click()
+
+    await expect(page.getByText("User suspended successfully")).toBeVisible()
+    await expect(userRow.getByText("Suspended")).toBeVisible()
+
+    await userRow.getByRole("button").click()
+    await page.getByRole("menuitem", { name: "Reactivate User" }).click()
+    await page.getByRole("button", { name: "Reactivate" }).click()
+
+    await expect(page.getByText("User reactivated successfully")).toBeVisible()
+    await expect(userRow.getByText("Active")).toBeVisible()
+  })
+
   test("Delete a user successfully", async ({ page }) => {
     await page.goto("/admin")
 
